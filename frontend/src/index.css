@@ -340,3 +340,109 @@ body {
   max-width: 420px;
   cursor: pointer;
 }
+
+/* Live 35mm Ken-Burns Motion Viewport & Progress Telemetry */
+@keyframes kenBurns35mm {
+  0% {
+    transform: scale(1.0) translate3d(0, 0, 0);
+    filter: contrast(1.06) saturate(1.12);
+  }
+  50% {
+    transform: scale(1.11) translate3d(-1.5%, -1%, 0);
+    filter: contrast(1.1) saturate(1.18);
+  }
+  100% {
+    transform: scale(1.04) translate3d(1.2%, 0.8%, 0);
+    filter: contrast(1.06) saturate(1.12);
+  }
+}
+
+@keyframes scanlinePulse {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.34; }
+}
+
+.ken-burns-viewport {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  aspect-ratio: 16/9;
+  margin: 1.2rem auto;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  box-shadow: 0 0 36px rgba(0, 229, 255, 0.18);
+  background: #050811;
+}
+
+.ken-burns-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: kenBurns35mm 9s ease-in-out infinite alternate;
+}
+
+.film-hud-badge {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  padding: 0.32rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(6, 9, 17, 0.72);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #00e5ff;
+  animation: scanlinePulse 2s ease-in-out infinite;
+}
+
+.fe-progress-track {
+  width: 100%;
+  max-width: 640px;
+  height: 10px;
+  margin: 1rem auto;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fe-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #00e5ff 0%, #38bdf8 50%, #f472b6 100%);
+  transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 0 0 16px rgba(0, 229, 255, 0.55);
+}
+
+.scene-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin: 1rem auto;
+  max-width: 720px;
+}
+
+.scene-status-pill {
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #cbd5e1;
+}
+
+.scene-status-pill.active {
+  border-color: var(--cyan-glow);
+  color: #00e5ff;
+  background: rgba(0, 229, 255, 0.12);
+}
+
+.scene-status-pill.done {
+  border-color: #34d399;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+}

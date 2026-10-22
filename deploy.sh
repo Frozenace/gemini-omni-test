@@ -27,26 +27,36 @@ echo "✅ Target Region  : ${REGION}"
 echo "✅ Asset Bucket   : gs://${BUCKET_NAME}"
 echo "✅ Active Identity: ${ACTIVE_ACCOUNT}"
 
-echo "⚙️ Enabling required Vertex AI, Cloud Run, Cloud Build, and Storage APIs..."
+echo "⚙️ Enabling required Vertex AI, Cloud Run, Cloud Tasks, Cloud Build, and Storage APIs..."
 gcloud services enable \
   aiplatform.googleapis.com \
   run.googleapis.com \
+  cloudtasks.googleapis.com \
   cloudbuild.googleapis.com \
   storage.googleapis.com \
   cloudresourcemanager.googleapis.com \
   --project="${PROJECT_ID}"
 
-# Automatically attempt to grant Vertex AI & Storage roles to the active user and Cloud Run default SA
+# Automatically attempt to grant Vertex AI, Cloud Tasks & Storage roles to the active user and Cloud Run default SA
 # (Succeeds automatically if the caller has Project Owner / IAM Admin permissions; continues gracefully otherwise)
 if [[ -n "${PROJECT_NUMBER}" ]]; then
   COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-  echo "🔐 Ensuring Vertex AI & Storage IAM roles on Cloud Run Service Account (${COMPUTE_SA})..."
-  for ROLE in "roles/aiplatform.user" "roles/aiplatform.admin" "roles/storage.admin"; do
+  echo "🔐 Ensuring Vertex AI, Cloud Tasks & Storage IAM roles on Cloud Run Service Account (${COMPUTE_SA})..."
+  for ROLE in "roles/aiplatform.user" "roles/aiplatform.admin" "roles/storage.admin" "roles/cloudtasks.enqueuer"; do
     gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
       --member="serviceAccount:${COMPUTE_SA}" \
       --role="${ROLE}" \
       --quiet >/dev/null 2>&1 || true
   done
+fi
+
+echo "⚡ Ensuring Cloud Tasks queue (fe-kiosk-scene-queue) exists in ${REGION} for distributed 6-scene fan-out..."
+if ! gcloud tasks queues describe fe-kiosk-scene-queue --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  gcloud tasks queues create fe-kiosk-scene-queue \
+    --location="${REGION}" \
+    --project="${PROJECT_ID}" \
+    --max-concurrent-dispatches=6 \
+    --max-dispatches-per-second=6 >/dev/null 2>&1 || true
 fi
 
 if [[ -n "${ACTIVE_ACCOUNT}" ]]; then
@@ -74,12 +84,18 @@ gcloud run deploy fe-kiosk-backend \
   --project "${PROJECT_ID}" \
   --region "${REGION}" \
   --allow-unauthenticated \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,GCS_BUCKET_NAME=${BUCKET_NAME}" \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global,GCS_BUCKET_NAME=${BUCKET_NAME},CLOUD_TASKS_QUEUE=fe-kiosk-scene-queue,CLOUD_TASKS_LOCATION=${REGION}" \
   --memory 2Gi \
   --cpu 2 \
   --timeout 900
 
 BACKEND_URL="$(gcloud run services describe fe-kiosk-backend --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
+# Bind SERVICE_URL so Cloud Tasks workers know the public endpoint of fe-kiosk-backend
+gcloud run services update fe-kiosk-backend \
+  --project "${PROJECT_ID}" \
+  --region "${REGION}" \
+  --update-env-vars="SERVICE_URL=${BACKEND_URL}" \
+  --quiet >/dev/null 2>&1 || true
 echo "✅ Backend deployed at: ${BACKEND_URL}"
 
 echo "🎨 Building & Deploying Liquid Glass Frontend (fe-kiosk-frontend) to Cloud Run..."

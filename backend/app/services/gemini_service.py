@@ -18,8 +18,9 @@ import os
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from google import genai
 from google.cloud import storage
@@ -229,6 +230,7 @@ def _test_project_iam_permissions(project_id: str) -> list[str]:
         "aiplatform.endpoints.predict",
         "storage.objects.create",
         "run.services.create",
+        "cloudtasks.tasks.create",
     ]
     try:
         import google.auth
@@ -559,80 +561,110 @@ def _get_gen4_reference_bytes() -> bytes | None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Codelab Function: Nano Banana 2 (4 Candidates + Judge Selection)
+# 3. Codelab Function: Nano Banana 2 (4 Parallel Candidates + Judge Selection)
 # ---------------------------------------------------------------------------
+def _generate_single_candidate(
+    idx: int,
+    driver_prompt: str,
+    image_bytes: bytes | None,
+    gen4_ref_bytes: bytes | None,
+    image_model: str,
+    caps: dict[str, Any],
+) -> dict[str, Any]:
+    """Generate a single Nano Banana 2 candidate keyframe (executed concurrently across 4 worker threads)."""
+    client = caps["client"]
+    take_prompt = f"{driver_prompt}\n(35mm Anamorphic Take #{idx + 1} — Kodak Vision3 500T)"
+
+    if not caps["supports_interactions"]:
+        from google.genai import types
+        contents: list[Any] = [take_prompt]
+        if image_bytes:
+            contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
+        if gen4_ref_bytes:
+            contents.append(types.Part.from_bytes(data=gen4_ref_bytes, mime_type="image/webp"))
+        res = client.models.generate_content(
+            model=image_model,
+            contents=contents,
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+        )
+        img_bytes = None
+        for part in (res.candidates[0].content.parts if res.candidates else []):
+            if getattr(part, "inline_data", None) and part.inline_data.data:
+                img_bytes = part.inline_data.data
+                break
+        if not img_bytes:
+            raise RuntimeError("No image bytes returned from standard Vertex generate_content")
+        return {"index": idx, "interaction_id": None, "bytes": img_bytes}
+
+    input_parts: list[dict[str, Any]] = [{"type": "text", "text": take_prompt}]
+    if image_bytes:
+        input_parts.append(
+            {
+                "type": "image",
+                "data": base64.b64encode(image_bytes).decode("utf-8"),
+                "mime_type": "image/jpeg",
+            }
+        )
+    if gen4_ref_bytes:
+        input_parts.append(
+            {
+                "type": "image",
+                "data": base64.b64encode(gen4_ref_bytes).decode("utf-8"),
+                "mime_type": "image/webp",
+            }
+        )
+
+    res = client.interactions.create(
+        model=image_model,
+        store=True,
+        input=input_parts,
+        response_modalities=["image"],
+    )
+    img_bytes = _extract_bytes_from_interaction(res)
+    return {
+        "index": idx,
+        "interaction_id": res.id,
+        "bytes": img_bytes,
+    }
+
+
 def generate_driver_avatar(
     driver_prompt: str,
     image_bytes: bytes | None = None,
     num_candidates: int = 4,
     return_metadata: bool = False,
+    on_candidate_ready: Callable[[int, bytes], None] | None = None,
 ) -> bytes | dict[str, Any]:
-    """Generate 4 candidate 35mm keyframes with Nano Banana 2 (`gemini-3.1-flash-image`) and pick the winner."""
+    """Generate 4 candidate 35mm keyframes concurrently with Nano Banana 2 (`gemini-3.1-flash-image`) and pick the winner."""
     caps = detect_runtime_capabilities()
-    client = caps["client"]
     image_model = os.environ.get("IMAGE_MODEL", "gemini-3.1-flash-image")
     gen4_ref_bytes = _get_gen4_reference_bytes()
 
-    candidates: list[dict[str, Any]] = []
-    for idx in range(num_candidates):
-        take_prompt = f"{driver_prompt}\n(35mm Anamorphic Take #{idx + 1} — Kodak Vision3 500T)"
+    candidates_by_idx: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, num_candidates)) as pool:
+        future_to_idx = {
+            pool.submit(
+                _generate_single_candidate,
+                idx,
+                driver_prompt,
+                image_bytes,
+                gen4_ref_bytes,
+                image_model,
+                caps,
+            ): idx
+            for idx in range(num_candidates)
+        }
+        for fut in as_completed(future_to_idx):
+            cand = fut.result()
+            c_idx = cand["index"]
+            candidates_by_idx[c_idx] = cand
+            if on_candidate_ready:
+                try:
+                    on_candidate_ready(c_idx, cand["bytes"])
+                except Exception as cb_exc:
+                    logger.debug("on_candidate_ready callback warning: %s", cb_exc)
 
-        if not caps["supports_interactions"]:
-            # Standard Vertex AI fallback (`models.generate_content` with `gemini-3.1-flash-image`)
-            from google.genai import types
-            contents: list[Any] = [take_prompt]
-            if image_bytes:
-                contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
-            if gen4_ref_bytes:
-                contents.append(types.Part.from_bytes(data=gen4_ref_bytes, mime_type="image/webp"))
-            res = client.models.generate_content(
-                model=image_model,
-                contents=contents,
-                config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-            )
-            img_bytes = None
-            for part in (res.candidates[0].content.parts if res.candidates else []):
-                if getattr(part, "inline_data", None) and part.inline_data.data:
-                    img_bytes = part.inline_data.data
-                    break
-            if not img_bytes:
-                raise RuntimeError("No image bytes returned from standard Vertex generate_content")
-            candidates.append({"index": idx, "interaction_id": None, "bytes": img_bytes})
-            continue
-
-        input_parts: list[dict[str, Any]] = [{"type": "text", "text": take_prompt}]
-        if image_bytes:
-            input_parts.append(
-                {
-                    "type": "image",
-                    "data": base64.b64encode(image_bytes).decode("utf-8"),
-                    "mime_type": "image/jpeg",
-                }
-            )
-        if gen4_ref_bytes:
-            input_parts.append(
-                {
-                    "type": "image",
-                    "data": base64.b64encode(gen4_ref_bytes).decode("utf-8"),
-                    "mime_type": "image/webp",
-                }
-            )
-
-        res = client.interactions.create(
-            model=image_model,
-            store=True,
-            input=input_parts,
-            response_modalities=["image"],
-        )
-        img_bytes = _extract_bytes_from_interaction(res)
-        candidates.append(
-            {
-                "index": idx,
-                "interaction_id": res.id,
-                "bytes": img_bytes,
-            }
-        )
-
+    candidates = [candidates_by_idx[i] for i in sorted(candidates_by_idx.keys())]
     judge_result = judge_image_candidates(candidates, driver_prompt)
     winner_idx = judge_result["winner_index"]
     winner = candidates[winner_idx]
@@ -646,6 +678,43 @@ def generate_driver_avatar(
             "judge_verdict": judge_result["verdict"],
         }
     return winner["bytes"]
+
+
+def render_fast_35mm_preview(avatar_bytes: bytes, duration: int = 4) -> bytes:
+    """Render an instant (<1s) looping 35mm Kodak Vision3 motion preview while Gemini Omni renders the 8s 60fps clip."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        img_path = tmp_dir / "keyframe.jpg"
+        out_path = tmp_dir / "preview.mp4"
+        img_path.write_bytes(avatar_bytes)
+        vf = (
+            "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,"
+            f"zoompan=z='min(zoom+0.0012,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d={duration*30}:s=1280x720:fps=30,"
+            "noise=alls=7:allf=t+u"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            str(img_path),
+            "-t",
+            str(duration),
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(out_path),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return out_path.read_bytes()
 
 
 def _render_35mm_ken_burns_fallback(avatar_bytes: bytes, duration: int = 8) -> bytes:

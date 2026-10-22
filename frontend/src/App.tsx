@@ -10,8 +10,10 @@ interface SceneItem {
   video_prompt: string;
   candidates: string[];
   winner_url?: string | null;
+  preview_video_url?: string | null;
   video_url?: string | null;
   judge_verdict?: any;
+  status?: string;
 }
 
 export default function App() {
@@ -36,9 +38,14 @@ export default function App() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
   const [stage, setStage] = useState<string>('');
+  const [progressPct, setProgressPct] = useState<number>(0);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [verification, setVerification] = useState<any>(null);
+  const [scenesProgress, setScenesProgress] = useState<Record<string, string> | null>(null);
+  const [executionMode, setExecutionMode] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -206,8 +213,18 @@ export default function App() {
         const data = await res.json();
         setStatus(data.status);
         setStage(data.stage);
+        if (typeof data.progress_pct === 'number') setProgressPct(data.progress_pct);
+        if (data.preview_video_url) setPreviewVideoUrl(data.preview_video_url);
+        if (data.avatar_url) setAvatarUrl(data.avatar_url);
         if (data.candidates?.length) setCandidates(data.candidates);
         if (data.verification) setVerification(data.verification);
+        if (data.scenes_progress) setScenesProgress(data.scenes_progress);
+        if (data.execution_mode) setExecutionMode(data.execution_mode);
+
+        // Refresh storyboard while 6-scene fan-out is running so scene cards animate live
+        if (id.startsWith('film-')) {
+          fetchStoryboard();
+        }
 
         if (data.status === 'completed') {
           setResultUrl(data.result_url);
@@ -219,7 +236,7 @@ export default function App() {
       } catch (err) {
         console.error('Error polling job:', err);
       }
-    }, 3000);
+    }, 1500);
   };
 
   const handleReset = () => {
@@ -229,9 +246,14 @@ export default function App() {
     setJobId(null);
     setStatus('');
     setStage('');
+    setProgressPct(0);
     setResultUrl(null);
+    setPreviewVideoUrl(null);
+    setAvatarUrl(null);
     setCandidates([]);
     setVerification(null);
+    setScenesProgress(null);
+    setExecutionMode(null);
   };
 
   return (
@@ -298,7 +320,7 @@ export default function App() {
               ) : (
                 <div
                   style={{
-                    padding: '3rem 1.5rem',
+                    padding: '2.5rem 1.5rem',
                     borderRadius: '20px',
                     background: 'rgba(6, 9, 17, 0.55)',
                     border: '1px dashed rgba(255,255,255,0.18)',
@@ -306,7 +328,7 @@ export default function App() {
                   }}
                 >
                   <p style={{ color: '#cbd5e1', marginBottom: '1.2rem' }}>
-                    Ready to execute the 6-scene Multimodal Chaining Pipeline (4 Nano Banana keyframes per scene → Visual Judge → Gemini Omni 8s 60fps Video → FFmpeg Master Cut + 35mm Ending Slate).
+                    Ready to execute the parallel 6-scene Multimodal Chaining Pipeline (4x concurrent Nano Banana keyframes per scene → Visual Judge → Live 35mm Motion Preview → Gemini Omni 8s 60fps Video → FFmpeg Master Cut + 35mm Ending Slate).
                   </p>
                   <button
                     type="button"
@@ -316,8 +338,49 @@ export default function App() {
                   >
                     {status === 'processing'
                       ? `⚡ ${stage}`
-                      : '🎬 GENERATE FULL 6-SCENE 35MM FILM'}
+                      : '🎬 GENERATE FULL 6-SCENE 35MM FILM (PARALLEL FAN-OUT)'}
                   </button>
+
+                  {status === 'processing' && (
+                    <div style={{ marginTop: '1.4rem' }}>
+                      <div className="fe-progress-track">
+                        <div className="fe-progress-bar" style={{ width: `${Math.max(8, progressPct)}%` }} />
+                      </div>
+                      {scenesProgress && (
+                        <div className="scene-status-grid">
+                          {Object.entries(scenesProgress).map(([sKey, sState]) => (
+                            <span
+                              key={sKey}
+                              className={`scene-status-pill ${
+                                sState === 'completed' ? 'done' : sState !== 'queued' ? 'active' : ''
+                              }`}
+                            >
+                              {sKey}: {sState}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {(previewVideoUrl || avatarUrl) && (
+                        <div className="ken-burns-viewport">
+                          {previewVideoUrl ? (
+                            <video
+                              src={previewVideoUrl}
+                              autoPlay
+                              loop
+                              muted
+                              playsInline
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            <img src={avatarUrl!} alt="35mm Live Preview" className="ken-burns-img" />
+                          )}
+                          <div className="film-hud-badge">
+                            ● LIVE 35MM TAKE STREAMING ({executionMode || 'PARALLEL'})
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -352,6 +415,29 @@ export default function App() {
                       <strong>35mm Keyframe Direction:</strong>
                       <div style={{ marginTop: '0.3rem' }}>{scene.image_prompt}</div>
                     </div>
+
+                    {(scene.video_url || scene.preview_video_url || scene.winner_url) && (
+                      <div style={{ marginBottom: '0.8rem', position: 'relative', borderRadius: '12px', overflow: 'hidden' }}>
+                        {scene.video_url || scene.preview_video_url ? (
+                          <video
+                            src={scene.video_url || scene.preview_video_url || ''}
+                            autoPlay
+                            loop
+                            muted
+                            playsInline
+                            controls={Boolean(scene.video_url)}
+                            style={{ width: '100%', borderRadius: '12px', display: 'block' }}
+                          />
+                        ) : (
+                          <img
+                            src={scene.winner_url!}
+                            alt={scene.title}
+                            className="ken-burns-img"
+                            style={{ width: '100%', borderRadius: '12px', display: 'block' }}
+                          />
+                        )}
+                      </div>
+                    )}
 
                     {scene.candidates && scene.candidates.length > 0 && (
                       <div>
@@ -526,18 +612,60 @@ export default function App() {
               <div className="fe-card liquid-glass" style={{ textAlign: 'center' }}>
                 <h2>Multimodal Chaining Pipeline Progress</h2>
                 <p>
-                  <strong>Status:</strong> {status.toUpperCase() || 'INITIALIZING...'}
+                  <strong>Status:</strong> {status.toUpperCase() || 'INITIALIZING...'} ({progressPct}%)
                 </p>
+                <div className="fe-progress-track">
+                  <div className="fe-progress-bar" style={{ width: `${Math.max(8, progressPct)}%` }} />
+                </div>
                 <p style={{ color: '#00e5ff' }}>
                   <strong>Stage:</strong> {stage || 'Starting processing...'}
                 </p>
 
+                {/* Live 35mm Motion Viewport while Gemini Omni 60fps video is rendering */}
+                {!resultUrl && (previewVideoUrl || avatarUrl || previewUrl) && (
+                  <div className="ken-burns-viewport">
+                    {previewVideoUrl ? (
+                      <video
+                        src={previewVideoUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <img
+                        src={avatarUrl || previewUrl!}
+                        alt="Live 35mm Motion Preview"
+                        className="ken-burns-img"
+                      />
+                    )}
+                    <div className="film-hud-badge">
+                      {previewVideoUrl
+                        ? '● 35MM MOTION PREVIEW LIVE — RENDERING OMNI 60FPS HD...'
+                        : avatarUrl
+                        ? '● 35MM KEYFRAME LOCKED — ANAMORPHIC MOTION ACTIVE'
+                        : '● ANALYZING DRIVER LIKENESS — GEMINI 3.8 FLASH'}
+                    </div>
+                  </div>
+                )}
+
                 {candidates.length > 0 && (
                   <div style={{ margin: '1.5rem 0' }}>
-                    <h4>4 Nano Banana 2 Keyframe Candidates Evaluated by Judge:</h4>
+                    <h4>
+                      {candidates.length}/4 Nano Banana 2 Keyframe Candidates Streamed (4x Parallel):
+                    </h4>
                     <div className="candidate-strip">
                       {candidates.map((cUrl, i) => (
-                        <img key={i} src={cUrl} alt={`Take ${i + 1}`} className="candidate-thumb" />
+                        <img
+                          key={i}
+                          src={cUrl}
+                          alt={`Take ${i + 1}`}
+                          className="candidate-thumb"
+                          style={{
+                            borderColor: cUrl === avatarUrl ? '#00e5ff' : 'rgba(255,255,255,0.15)',
+                          }}
+                        />
                       ))}
                     </div>
                   </div>
