@@ -15,10 +15,10 @@ An end-to-end **35mm Kodak Vision3 Anamorphic Short Film Pipeline & Liquid Glass
 1. [`00_character_sheets.md`](./storyboard/00_character_sheets.md) — Character locks (Toshiro Sakamoto, Momoko) & GEN4 600kW AWD specs
 2. [`00_story_overview.md`](./storyboard/00_story_overview.md) — 3-Act arc, 35mm aesthetic lock, and Interactions API chaining diagram
 3. [`01_dawn_calm.md`](./storyboard/01_dawn_calm.md) — **Scene 01:** Rainy UK Setback & Second Chance (Oxfordshire Factory)
-4. [`02_garage_awakening.md`](./storyboard/02_garage_awakening.md) — **Scene 02:** Late Nights at the UK Simulator Bay
-5. [`03_grid_focus.md`](./storyboard/03_grid_focus.md) — **Scene 03:** Arrival at Tokyo Big Sight Waterfront Paddock
-6. [`04_the_launch.md`](./storyboard/04_the_launch.md) — **Scene 04:** Grid Tension & 600kW Active-AWD Launch
-7. [`05_sakura_vortex.md`](./storyboard/05_sakura_vortex.md) — **Scene 05:** The 208 mph Ariake Sakura Vortex
+4. [`02_pit_awakening.md`](./storyboard/02_pit_awakening.md) — **Scene 02:** Late Nights at the UK Simulator Bay
+5. [`03_grid_launch.md`](./storyboard/03_grid_launch.md) — **Scene 03:** Arrival at Tokyo Big Sight Waterfront Paddock
+6. [`04_sakura_vortex.md`](./storyboard/04_sakura_vortex.md) — **Scene 04:** Grid Tension & 600kW Active-AWD Launch
+7. [`05_neon_apex.md`](./storyboard/05_neon_apex.md) — **Scene 05:** The 208 mph Ariake Sakura Vortex
 8. [`06_checkered_bloom.md`](./storyboard/06_checkered_bloom.md) — **Scene 06:** Last-Corner Pass, Parc Fermé Embrace & 35mm Finale Slate
 
 ---
