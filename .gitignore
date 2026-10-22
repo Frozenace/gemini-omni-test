@@ -21,10 +21,8 @@ yarn-error.log*
 *.json.key
 service-account*.json
 
-# Runtime generated media & temporary stitch workspace
+# Runtime temporary jobs & stitch scratch workspace (pre-generated showcase in assets/scenes & assets/final is tracked!)
 assets/jobs/
-assets/scenes/
-assets/final/
 assets/tmp_stitch/
 assets/tmp_verify/
 assets/branding/*.webp

@@ -1,0 +1,10 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+frontend/node_modules
+frontend/dist
+assets/jobs
+assets/tmp_stitch
+assets/tmp_verify
+.env

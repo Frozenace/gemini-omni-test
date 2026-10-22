@@ -11,22 +11,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.services.gemini_service import (
+    BASE_DIR,
     LOCAL_ASSETS_DIR,
     SCENARIO_SCENES,
     detect_runtime_capabilities,
     generate_driver_avatar,
     generate_driver_prompt,
     generate_formula_e_video,
+    judge_image_candidates,
     render_fast_35mm_preview,
     upload_to_gcs,
 )
@@ -314,20 +318,42 @@ async def _render_single_scene_worker(
             jobs_db[job_id]["scenes_progress"][s_key] = "keyframes (4x parallel)"
 
         streamed_urls: dict[int, str] = {}
+        existing_cands = [
+            LOCAL_ASSETS_DIR / f"scenes/{s_key}/candidate_{i}.jpg" for i in range(4)
+        ]
+        if (
+            os.environ.get("REUSE_EXISTING_KEYFRAMES", "").lower() == "true"
+            and all(p.exists() and p.stat().st_size > 1000 for p in existing_cands)
+        ):
+            candidates_list = [
+                {"index": i, "interaction_id": None, "bytes": existing_cands[i].read_bytes()}
+                for i in range(4)
+            ]
+            for i in range(4):
+                streamed_urls[i] = f"/assets/scenes/{s_key}/candidate_{i}.jpg"
+            judge_res = await asyncio.to_thread(judge_image_candidates, candidates_list, prompt)
+            w_idx = judge_res["winner_index"]
+            avatar_meta = {
+                "winner_bytes": candidates_list[w_idx]["bytes"],
+                "winner_interaction_id": None,
+                "winner_index": w_idx,
+                "candidates": candidates_list,
+                "judge_verdict": judge_res["verdict"],
+            }
+        else:
+            def _on_cand(c_idx: int, c_bytes: bytes) -> None:
+                url = upload_to_gcs(
+                    c_bytes,
+                    f"scenes/{s_key}/candidate_{c_idx}.jpg",
+                    "image/jpeg",
+                )
+                streamed_urls[c_idx] = url
+                if job_id in jobs_db and not jobs_db[job_id].get("avatar_url"):
+                    jobs_db[job_id]["avatar_url"] = url
 
-        def _on_cand(c_idx: int, c_bytes: bytes) -> None:
-            url = upload_to_gcs(
-                c_bytes,
-                f"scenes/{s_key}/candidate_{c_idx}.jpg",
-                "image/jpeg",
+            avatar_meta = await asyncio.to_thread(
+                generate_driver_avatar, prompt, None, 4, True, _on_cand
             )
-            streamed_urls[c_idx] = url
-            if job_id in jobs_db and not jobs_db[job_id].get("avatar_url"):
-                jobs_db[job_id]["avatar_url"] = url
-
-        avatar_meta = await asyncio.to_thread(
-            generate_driver_avatar, prompt, None, 4, True, _on_cand
-        )
         assert isinstance(avatar_meta, dict)
 
         c_urls = [
@@ -566,3 +592,8 @@ def get_job_status(job_id: str) -> JobStatus:
         scenes_progress=data.get("scenes_progress"),
         execution_mode=data.get("execution_mode"),
     )
+
+
+FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")

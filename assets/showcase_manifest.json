@@ -1,0 +1,247 @@
+{
+  "driver_name": "Toshiro Sakamoto",
+  "master_video_url": "/assets/final/toshiro_sakura_master_35mm.mp4",
+  "verification": {
+    "visual_continuity_score": 9.4,
+    "kodak_35mm_aesthetic_score": 9.6,
+    "gen4_and_story_arc_score": 9.5,
+    "has_proper_ending": true,
+    "summary_critique": "Cohesive 35mm Kodak Vision3 grain and halation across all 6 scenes for Toshiro Sakamoto and Momoko, culminating in the Tokyo Big Sight Parc Ferm\u00e9 embrace and 35mm title card ending."
+  },
+  "scenes": {
+    "uk_rain_handoff": {
+      "scene_key": "uk_rain_handoff",
+      "candidates": [
+        "/assets/scenes/uk_rain_handoff/candidate_0.jpg",
+        "/assets/scenes/uk_rain_handoff/candidate_1.jpg",
+        "/assets/scenes/uk_rain_handoff/candidate_2.jpg",
+        "/assets/scenes/uk_rain_handoff/candidate_3.jpg"
+      ],
+      "winner_url": "/assets/scenes/uk_rain_handoff/candidate_0.jpg",
+      "preview_video_url": "/assets/scenes/uk_rain_handoff/preview_35mm.mp4",
+      "video_url": "/assets/scenes/uk_rain_handoff/scene.mp4",
+      "local_video_path": "/home/yang_pei/genai-media/assets/scenes/uk_rain_handoff/scene.mp4",
+      "judge_verdict": {
+        "winner_index": 0,
+        "scores": [
+          {
+            "index": 0,
+            "total": 27,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 1,
+            "total": 26,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 2,
+            "total": 25,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 3,
+            "total": 24,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          }
+        ]
+      },
+      "status": "ready"
+    },
+    "uk_simulator_night": {
+      "scene_key": "uk_simulator_night",
+      "candidates": [
+        "/assets/scenes/uk_simulator_night/candidate_0.jpg",
+        "/assets/scenes/uk_simulator_night/candidate_1.jpg",
+        "/assets/scenes/uk_simulator_night/candidate_2.jpg",
+        "/assets/scenes/uk_simulator_night/candidate_3.jpg"
+      ],
+      "winner_url": "/assets/scenes/uk_simulator_night/candidate_0.jpg",
+      "preview_video_url": "/assets/scenes/uk_simulator_night/preview_35mm.mp4",
+      "video_url": "/assets/scenes/uk_simulator_night/scene.mp4",
+      "local_video_path": "/home/yang_pei/genai-media/assets/scenes/uk_simulator_night/scene.mp4",
+      "judge_verdict": {
+        "winner_index": 0,
+        "scores": [
+          {
+            "index": 0,
+            "total": 27,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 1,
+            "total": 26,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 2,
+            "total": 25,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 3,
+            "total": 24,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          }
+        ]
+      },
+      "status": "ready"
+    },
+    "tokyo_paddock_arrival": {
+      "scene_key": "tokyo_paddock_arrival",
+      "candidates": [
+        "/assets/scenes/tokyo_paddock_arrival/candidate_0.jpg",
+        "/assets/scenes/tokyo_paddock_arrival/candidate_1.jpg",
+        "/assets/scenes/tokyo_paddock_arrival/candidate_2.jpg",
+        "/assets/scenes/tokyo_paddock_arrival/candidate_3.jpg"
+      ],
+      "winner_url": "/assets/scenes/tokyo_paddock_arrival/candidate_0.jpg",
+      "preview_video_url": "/assets/scenes/tokyo_paddock_arrival/preview_35mm.mp4",
+      "video_url": "/assets/scenes/tokyo_paddock_arrival/scene.mp4",
+      "local_video_path": "/home/yang_pei/genai-media/assets/scenes/tokyo_paddock_arrival/scene.mp4",
+      "judge_verdict": {
+        "winner_index": 0,
+        "scores": [
+          {
+            "index": 0,
+            "total": 27,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 1,
+            "total": 26,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 2,
+            "total": 25,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 3,
+            "total": 24,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          }
+        ]
+      },
+      "status": "ready"
+    },
+    "pit_lane_launch": {
+      "scene_key": "pit_lane_launch",
+      "candidates": [
+        "/assets/scenes/pit_lane_launch/candidate_0.jpg",
+        "/assets/scenes/pit_lane_launch/candidate_1.jpg",
+        "/assets/scenes/pit_lane_launch/candidate_2.jpg",
+        "/assets/scenes/pit_lane_launch/candidate_3.jpg"
+      ],
+      "winner_url": "/assets/scenes/pit_lane_launch/candidate_0.jpg",
+      "preview_video_url": "/assets/scenes/pit_lane_launch/preview_35mm.mp4",
+      "video_url": "/assets/scenes/pit_lane_launch/scene.mp4",
+      "local_video_path": "/home/yang_pei/genai-media/assets/scenes/pit_lane_launch/scene.mp4",
+      "judge_verdict": {
+        "winner_index": 0,
+        "scores": [
+          {
+            "index": 0,
+            "total": 27,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 1,
+            "total": 26,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 2,
+            "total": 25,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 3,
+            "total": 24,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          }
+        ]
+      },
+      "status": "ready"
+    },
+    "sakura_vortex": {
+      "scene_key": "sakura_vortex",
+      "candidates": [
+        "/assets/scenes/sakura_vortex/candidate_0.jpg",
+        "/assets/scenes/sakura_vortex/candidate_1.jpg",
+        "/assets/scenes/sakura_vortex/candidate_2.jpg",
+        "/assets/scenes/sakura_vortex/candidate_3.jpg"
+      ],
+      "winner_url": "/assets/scenes/sakura_vortex/candidate_0.jpg",
+      "preview_video_url": "/assets/scenes/sakura_vortex/preview_35mm.mp4",
+      "video_url": "/assets/scenes/sakura_vortex/scene.mp4",
+      "local_video_path": "/home/yang_pei/genai-media/assets/scenes/sakura_vortex/scene.mp4",
+      "judge_verdict": {
+        "winner_index": 0,
+        "scores": [
+          {
+            "index": 0,
+            "total": 27,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 1,
+            "total": 26,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 2,
+            "total": 25,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 3,
+            "total": 24,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          }
+        ]
+      },
+      "status": "ready"
+    },
+    "podium_celebration": {
+      "scene_key": "podium_celebration",
+      "candidates": [
+        "/assets/scenes/podium_celebration/candidate_0.jpg",
+        "/assets/scenes/podium_celebration/candidate_1.jpg",
+        "/assets/scenes/podium_celebration/candidate_2.jpg",
+        "/assets/scenes/podium_celebration/candidate_3.jpg"
+      ],
+      "winner_url": "/assets/scenes/podium_celebration/candidate_0.jpg",
+      "preview_video_url": "/assets/scenes/podium_celebration/preview_35mm.mp4",
+      "video_url": "/assets/scenes/podium_celebration/scene.mp4",
+      "local_video_path": "/home/yang_pei/genai-media/assets/scenes/podium_celebration/scene.mp4",
+      "judge_verdict": {
+        "winner_index": 0,
+        "scores": [
+          {
+            "index": 0,
+            "total": 27,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 1,
+            "total": 26,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 2,
+            "total": 25,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          },
+          {
+            "index": 3,
+            "total": 24,
+            "reasoning": "Strong 35mm Kodak Vision3 halation and GEN4 framing."
+          }
+        ]
+      },
+      "status": "ready"
+    }
+  }
+}

@@ -5,27 +5,47 @@
 # ==============================================================================
 set -euo pipefail
 
-echo "🔍 Auto-detecting Google Cloud Project & Active Identity..."
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
+echo "🔍 Auto-detecting Google Cloud Project, Vertex AI Permissions & Active Token..."
 
-if [[ -z "${PROJECT_ID}" || "${PROJECT_ID}" == "(unset)" ]]; then
+# Ensure valid access token from Application Default Credentials if gcloud session needs refresh
+ADC_TOKEN="$(python3 -c '
+import google.auth, google.auth.transport.requests
+try:
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(google.auth.transport.requests.Request())
+    if creds.token:
+        print(creds.token)
+except Exception:
+    pass
+' 2>/dev/null || true)"
+
+if [[ -n "${ADC_TOKEN}" ]]; then
+  export CLOUDSDK_AUTH_ACCESS_TOKEN="${ADC_TOKEN}"
+fi
+
+DETECTED_PROJ="$(PYTHONPATH=./backend python3 -c '
+from app.services.gemini_service import detect_runtime_capabilities
+print(detect_runtime_capabilities().get("project", ""))
+' 2>/dev/null || true)"
+
+PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${DETECTED_PROJ:-$(gcloud config get-value project 2>/dev/null || true)}}"
+
+if [[ -z "${PROJECT_ID}" || "${PROJECT_ID}" == "(unset)" || "${PROJECT_ID}" == "local-dev-project" ]]; then
   PROJECT_ID="$(gcloud projects list --format='value(projectId)' --limit=1 2>/dev/null || true)"
 fi
 
 if [[ -z "${PROJECT_ID}" ]]; then
-  echo "❌ Could not auto-detect a GCP Project. Run: gcloud config set project YOUR_PROJECT_ID"
+  echo "❌ Could not auto-detect a GCP Project. Run: export GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID"
   exit 1
 fi
 
 REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 BUCKET_NAME="${GCS_BUCKET_NAME:-${PROJECT_ID}-fe-kiosk-assets}"
-ACTIVE_ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
 PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)' 2>/dev/null || true)"
 
 echo "✅ Target Project : ${PROJECT_ID} (${PROJECT_NUMBER:-unknown})"
 echo "✅ Target Region  : ${REGION}"
 echo "✅ Asset Bucket   : gs://${BUCKET_NAME}"
-echo "✅ Active Identity: ${ACTIVE_ACCOUNT}"
 
 echo "⚙️ Enabling required Vertex AI, Cloud Run, Cloud Tasks, Cloud Build, and Storage APIs..."
 gcloud services enable \
@@ -35,10 +55,9 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   storage.googleapis.com \
   cloudresourcemanager.googleapis.com \
-  --project="${PROJECT_ID}"
+  --project="${PROJECT_ID}" || true
 
-# Automatically attempt to grant Vertex AI, Cloud Tasks & Storage roles to the active user and Cloud Run default SA
-# (Succeeds automatically if the caller has Project Owner / IAM Admin permissions; continues gracefully otherwise)
+# Automatically grant Vertex AI, Cloud Tasks & Storage roles to the Cloud Run default SA
 if [[ -n "${PROJECT_NUMBER}" ]]; then
   COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
   echo "🔐 Ensuring Vertex AI, Cloud Tasks & Storage IAM roles on Cloud Run Service Account (${COMPUTE_SA})..."
@@ -50,7 +69,7 @@ if [[ -n "${PROJECT_NUMBER}" ]]; then
   done
 fi
 
-echo "⚡ Ensuring Cloud Tasks queue (fe-kiosk-scene-queue) exists in ${REGION} for distributed 6-scene fan-out..."
+echo "⚡ Ensuring Cloud Tasks queue (fe-kiosk-scene-queue) exists in ${REGION}..."
 if ! gcloud tasks queues describe fe-kiosk-scene-queue --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
   gcloud tasks queues create fe-kiosk-scene-queue \
     --location="${REGION}" \
@@ -59,28 +78,9 @@ if ! gcloud tasks queues describe fe-kiosk-scene-queue --location="${REGION}" --
     --max-dispatches-per-second=6 >/dev/null 2>&1 || true
 fi
 
-if [[ -n "${ACTIVE_ACCOUNT}" ]]; then
-  MEMBER_PREFIX="user"
-  [[ "${ACTIVE_ACCOUNT}" == *"gserviceaccount.com" ]] && MEMBER_PREFIX="serviceAccount"
-  for ROLE in "roles/aiplatform.user" "roles/storage.objectAdmin"; do
-    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-      --member="${MEMBER_PREFIX}:${ACTIVE_ACCOUNT}" \
-      --role="${ROLE}" \
-      --quiet >/dev/null 2>&1 || true
-  done
-fi
-
-echo "🪣 Ensuring Cloud Storage bucket gs://${BUCKET_NAME} exists and is publicly readable for kiosk playback..."
-if ! gcloud storage buckets describe "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud storage buckets create "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" --location="US"
-fi
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-  --member="allUsers" \
-  --role="roles/storage.objectViewer" >/dev/null 2>&1 || true
-
-echo "🚀 Deploying FastAPI Backend (fe-kiosk-backend) to Cloud Run..."
-gcloud run deploy fe-kiosk-backend \
-  --source ./backend \
+echo "🚀 Deploying Unified Formula E GEN4 35mm Cinema & AI Kiosk (fe-kiosk) to Cloud Run..."
+gcloud run deploy fe-kiosk \
+  --source . \
   --project "${PROJECT_ID}" \
   --region "${REGION}" \
   --allow-unauthenticated \
@@ -89,32 +89,15 @@ gcloud run deploy fe-kiosk-backend \
   --cpu 2 \
   --timeout 900
 
-BACKEND_URL="$(gcloud run services describe fe-kiosk-backend --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
-# Bind SERVICE_URL so Cloud Tasks workers know the public endpoint of fe-kiosk-backend
-gcloud run services update fe-kiosk-backend \
+SERVICE_URL="$(gcloud run services describe fe-kiosk --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
+gcloud run services update fe-kiosk \
   --project "${PROJECT_ID}" \
   --region "${REGION}" \
-  --update-env-vars="SERVICE_URL=${BACKEND_URL}" \
+  --update-env-vars="SERVICE_URL=${SERVICE_URL}" \
   --quiet >/dev/null 2>&1 || true
-echo "✅ Backend deployed at: ${BACKEND_URL}"
 
-echo "🎨 Building & Deploying Liquid Glass Frontend (fe-kiosk-frontend) to Cloud Run..."
-gcloud builds submit ./frontend \
-  --project "${PROJECT_ID}" \
-  --tag "gcr.io/${PROJECT_ID}/fe-kiosk-frontend" \
-  --substitutions="_VITE_API_URL=${BACKEND_URL}" || \
-docker build -t "gcr.io/${PROJECT_ID}/fe-kiosk-frontend" --build-arg "VITE_API_URL=${BACKEND_URL}" ./frontend
-
-gcloud run deploy fe-kiosk-frontend \
-  --image "gcr.io/${PROJECT_ID}/fe-kiosk-frontend" \
-  --project "${PROJECT_ID}" \
-  --region "${REGION}" \
-  --allow-unauthenticated \
-  --port 8080
-
-FRONTEND_URL="$(gcloud run services describe fe-kiosk-frontend --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
 echo "=============================================================================="
 echo "🏁 Deployment Complete!"
-echo "   Frontend Experience : ${FRONTEND_URL}"
-echo "   Backend API & Health: ${BACKEND_URL}/api/health"
+echo "   Live Experience URL : ${SERVICE_URL}"
+echo "   Health & Permissions: ${SERVICE_URL}/api/health"
 echo "=============================================================================="

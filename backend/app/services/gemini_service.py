@@ -28,14 +28,17 @@ from google.cloud import storage
 logger = logging.getLogger(__name__)
 
 def _detect_default_project() -> str:
-    """Auto-detect active GCP Project from env, google.auth.default(), metadata server, or gcloud."""
+    """Auto-detect active GCP Project from env, google.auth.default() (including quota_project_id), or gcloud."""
     for env_key in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT", "GCLOUD_PROJECT", "PROJECT_ID"):
         val = os.environ.get(env_key, "").strip()
         if val:
             return val
     try:
         import google.auth
-        _, proj = google.auth.default()
+        creds, proj = google.auth.default()
+        quota_proj = getattr(creds, "quota_project_id", None)
+        if quota_proj:
+            return quota_proj
         if proj:
             return proj
     except Exception:
@@ -201,11 +204,34 @@ SCENARIO_SCENES: dict[str, dict[str, str]] = {
 
 
 def _list_accessible_projects() -> list[str]:
-    """Return candidate GCP project IDs in priority order (env -> default auth -> gcloud list)."""
+    """Return candidate GCP project IDs in priority order (env -> ADC quota_project_id -> Cloud Resource Manager -> gcloud)."""
     candidates: list[str] = []
     primary = _detect_default_project()
     if primary and primary != "local-dev-project":
         candidates.append(primary)
+    try:
+        import google.auth
+        import google.auth.transport.requests
+        import httpx
+
+        creds, proj = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        for p in (getattr(creds, "quota_project_id", None), proj):
+            if p and p not in candidates:
+                candidates.append(p)
+        auth_req = google.auth.transport.requests.Request()
+        creds.refresh(auth_req)
+        resp = httpx.get(
+            "https://cloudresourcemanager.googleapis.com/v1/projects?pageSize=15",
+            headers={"Authorization": f"Bearer {creds.token}"},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            for item in resp.json().get("projects", []):
+                pid = item.get("projectId")
+                if pid and item.get("lifecycleState") == "ACTIVE" and pid not in candidates:
+                    candidates.append(pid)
+    except Exception:
+        pass
     try:
         out = subprocess.check_output(
             ["gcloud", "projects", "list", "--format=value(projectId)", "--limit=15"],
@@ -271,6 +297,7 @@ def detect_runtime_capabilities(force_refresh: bool = False) -> dict[str, Any]:
         client = genai.Client(api_key=api_key)
         _CACHED_CLIENT_MODE = {
             "client": client,
+            "vertex_client": client,
             "mode": "api_key",
             "project": PROJECT_ID,
             "location": LOCATION,
@@ -281,7 +308,7 @@ def detect_runtime_capabilities(force_refresh: bool = False) -> dict[str, Any]:
         return _CACHED_CLIENT_MODE
 
     projects_to_try = _list_accessible_projects() or [PROJECT_ID]
-    locations_to_try = [LOCATION] if LOCATION == "global" else [LOCATION, "global", "us-central1"]
+    locations_to_try = [LOCATION] if LOCATION == "global" else [LOCATION, "global"]
 
     project_permissions: dict[str, list[str]] = {}
     for proj in projects_to_try:
@@ -300,18 +327,19 @@ def detect_runtime_capabilities(force_refresh: bool = False) -> dict[str, Any]:
         reverse=True,
     )
 
-    # 1. Probe `enterprise=True` for `aiplatform.interactions.create` permission
+    # 1. Probe `enterprise=True` for `aiplatform.interactions.create` permission with `gemini-3.8-flash`
     for proj in projects_sorted:
         for loc in locations_to_try:
             try:
                 c = genai.Client(enterprise=True, project=proj, location=loc)
                 c.interactions.create(
                     model="gemini-3.8-flash",
-                    input=[{"type": "text", "text": "ping"}],
-                    generation_config={"max_output_tokens": 4},
+                    input=[{"type": "text", "text": "Say OK"}],
                 )
+                vtx_c = genai.Client(vertexai=True, project=proj, location="global")
                 _CACHED_CLIENT_MODE = {
                     "client": c,
+                    "vertex_client": vtx_c,
                     "mode": "enterprise_interactions",
                     "project": proj,
                     "location": loc,
@@ -327,17 +355,15 @@ def detect_runtime_capabilities(force_refresh: bool = False) -> dict[str, Any]:
             except Exception as exc:
                 logger.debug("Enterprise Interactions probe failed for %s/%s: %s", proj, loc, exc)
 
-    # 2. Fallback: Probe standard `vertexai=True` (`aiplatform.endpoints.predict`)
+    # 2. Fallback: Probe `vertexai=True` on location="global" with `gemini-3.1-flash-image` / `gemini-3.8-flash`
     for proj in projects_sorted:
         for loc in ("global", "us-central1"):
             try:
                 c = genai.Client(vertexai=True, project=proj, location=loc)
-                c.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents="ping",
-                )
+                c.models.get(model="publishers/google/models/gemini-3.1-flash-image")
                 _CACHED_CLIENT_MODE = {
                     "client": c,
+                    "vertex_client": c,
                     "mode": "vertex_standard",
                     "project": proj,
                     "location": loc,
@@ -345,19 +371,20 @@ def detect_runtime_capabilities(force_refresh: bool = False) -> dict[str, Any]:
                     "granted_permissions": project_permissions.get(proj, ["aiplatform.endpoints.predict"]),
                 }
                 logger.info(
-                    "Auto-detected standard Vertex AI permission on project=%s location=%s (Interactions fallback active)",
+                    "Auto-detected Vertex AI permission on project=%s location=%s",
                     proj,
                     loc,
                 )
                 return _CACHED_CLIENT_MODE
             except Exception as exc:
-                logger.debug("Standard Vertex probe failed for %s/%s: %s", proj, loc, exc)
+                logger.debug("Vertex probe failed for %s/%s: %s", proj, loc, exc)
 
     # 3. Default unprobed client (will surface clear error when invoked)
     best_proj = projects_sorted[0] if projects_sorted else PROJECT_ID
     default_client = genai.Client(enterprise=True, project=best_proj, location=LOCATION)
     _CACHED_CLIENT_MODE = {
         "client": default_client,
+        "vertex_client": genai.Client(vertexai=True, project=best_proj, location="global"),
         "mode": "unverified_enterprise",
         "project": best_proj,
         "location": LOCATION,
@@ -403,6 +430,25 @@ def _extract_text_from_interaction(interaction_res: Any) -> str:
     return ""
 
 
+def _detect_image_mime(data: bytes) -> str:
+    """Detect whether image bytes are PNG, WEBP, or JPEG so API calls never fail on MIME mismatch."""
+    if data[:8].startswith(b"\x89PNG"):
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
+def _parse_json_from_text(raw: str) -> dict[str, Any]:
+    """Extract and parse a JSON object from model output text (handling optional markdown code fences or prose)."""
+    cleaned = raw.strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        cleaned = cleaned[start : end + 1]
+    return json.loads(cleaned)
+
+
 # ---------------------------------------------------------------------------
 # 1. Codelab Function: Gemini 3.8 Flash Prompt Generation
 # ---------------------------------------------------------------------------
@@ -432,11 +478,12 @@ def generate_driver_prompt(
 
     if not caps["supports_interactions"]:
         from google.genai import types
+        vtx_client = caps.get("vertex_client") or client
         contents: list[Any] = [prompt_instruction]
         if image_bytes:
             contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
-        res = client.models.generate_content(
-            model="gemini-2.5-flash",
+        res = vtx_client.models.generate_content(
+            model="gemini-3.8-flash",
             contents=contents,
         )
         return (res.text or "").strip() or f"{FILM_STYLE_LOCK} {base_scene_prompt}"
@@ -491,19 +538,25 @@ def judge_image_candidates(
     try:
         if not caps["supports_interactions"]:
             from google.genai import types
+            vtx_client = caps.get("vertex_client") or client
             contents: list[Any] = [rubric_text]
             for idx, cand in enumerate(candidates):
                 contents.append(f"Candidate #{idx}:")
-                contents.append(types.Part.from_bytes(data=cand["bytes"], mime_type="image/jpeg"))
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
+                contents.append(
+                    types.Part.from_bytes(
+                        data=cand["bytes"],
+                        mime_type=_detect_image_mime(cand["bytes"]),
+                    )
+                )
+            res = vtx_client.models.generate_content(
+                model=judge_model,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
                 ),
             )
-            verdict = json.loads(res.text or "{}")
+            verdict = _parse_json_from_text(res.text or "{}")
         else:
             input_parts: list[dict[str, Any]] = [{"type": "text", "text": rubric_text}]
             for idx, cand in enumerate(candidates):
@@ -512,17 +565,16 @@ def judge_image_candidates(
                     {
                         "type": "image",
                         "data": base64.b64encode(cand["bytes"]).decode("utf-8"),
-                        "mime_type": "image/jpeg",
+                        "mime_type": _detect_image_mime(cand["bytes"]),
                     }
                 )
             res = client.interactions.create(
                 model=judge_model,
                 input=input_parts,
-                response_mime_type="application/json",
                 generation_config={"thinking_level": "high", "temperature": 0.1},
             )
             raw_json = _extract_text_from_interaction(res)
-            verdict = json.loads(raw_json)
+            verdict = _parse_json_from_text(raw_json)
 
         winner_idx = int(verdict.get("winner_index", 0))
         if 0 <= winner_idx < len(candidates):
@@ -571,61 +623,86 @@ def _generate_single_candidate(
     image_model: str,
     caps: dict[str, Any],
 ) -> dict[str, Any]:
-    """Generate a single Nano Banana 2 candidate keyframe (executed concurrently across 4 worker threads)."""
+    """Generate a single Nano Banana 2 (`gemini-3.1-flash-image` / `gemini-nano-banana-2.1`) candidate keyframe."""
     client = caps["client"]
-    take_prompt = f"{driver_prompt}\n(35mm Anamorphic Take #{idx + 1} — Kodak Vision3 500T)"
-
-    if not caps["supports_interactions"]:
-        from google.genai import types
-        contents: list[Any] = [take_prompt]
-        if image_bytes:
-            contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
-        if gen4_ref_bytes:
-            contents.append(types.Part.from_bytes(data=gen4_ref_bytes, mime_type="image/webp"))
-        res = client.models.generate_content(
-            model=image_model,
-            contents=contents,
-            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-        )
-        img_bytes = None
-        for part in (res.candidates[0].content.parts if res.candidates else []):
-            if getattr(part, "inline_data", None) and part.inline_data.data:
-                img_bytes = part.inline_data.data
-                break
-        if not img_bytes:
-            raise RuntimeError("No image bytes returned from standard Vertex generate_content")
-        return {"index": idx, "interaction_id": None, "bytes": img_bytes}
-
-    input_parts: list[dict[str, Any]] = [{"type": "text", "text": take_prompt}]
-    if image_bytes:
-        input_parts.append(
-            {
-                "type": "image",
-                "data": base64.b64encode(image_bytes).decode("utf-8"),
-                "mime_type": "image/jpeg",
-            }
-        )
-    if gen4_ref_bytes:
-        input_parts.append(
-            {
-                "type": "image",
-                "data": base64.b64encode(gen4_ref_bytes).decode("utf-8"),
-                "mime_type": "image/webp",
-            }
-        )
-
-    res = client.interactions.create(
-        model=image_model,
-        store=True,
-        input=input_parts,
-        response_modalities=["image"],
+    vtx_client = caps.get("vertex_client") or genai.Client(
+        vertexai=True, project=caps.get("project", PROJECT_ID), location="global"
     )
-    img_bytes = _extract_bytes_from_interaction(res)
-    return {
-        "index": idx,
-        "interaction_id": res.id,
-        "bytes": img_bytes,
-    }
+    take_prompt = (
+        f"Generate a single photorealistic 16:9 widescreen 35mm film frame image:\n"
+        f"{driver_prompt}\n(35mm Anamorphic Take #{idx + 1} — Kodak Vision3 500T)"
+    )
+
+    if caps["supports_interactions"] and os.environ.get("TRY_INTERACTIONS_IMAGE", "false").lower() == "true":
+        try:
+            input_parts: list[dict[str, Any]] = [{"type": "text", "text": take_prompt}]
+            if image_bytes:
+                input_parts.append(
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(image_bytes).decode("utf-8"),
+                        "mime_type": _detect_image_mime(image_bytes),
+                    }
+                )
+            if gen4_ref_bytes:
+                input_parts.append(
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(gen4_ref_bytes).decode("utf-8"),
+                        "mime_type": "image/webp",
+                    }
+                )
+
+            res = client.interactions.create(
+                model=image_model,
+                store=True,
+                input=input_parts,
+                response_modalities=["image"],
+            )
+            img_bytes = _extract_bytes_from_interaction(res)
+            return {
+                "index": idx,
+                "interaction_id": res.id,
+                "bytes": img_bytes,
+            }
+        except Exception as exc:
+            logger.debug("Interactions image route delegated to global Vertex endpoint: %s", exc)
+
+    from google.genai import types
+    models_to_try = [image_model, "gemini-nano-banana-2.1", "gemini-3.1-flash-image"]
+    last_err: Exception | None = None
+    for attempt in range(4):
+        active_model = models_to_try[attempt % len(models_to_try)]
+        try:
+            contents: list[Any] = [take_prompt]
+            if image_bytes:
+                contents.append(
+                    types.Part.from_bytes(
+                        data=image_bytes, mime_type=_detect_image_mime(image_bytes)
+                    )
+                )
+            if gen4_ref_bytes and attempt < 2:
+                contents.append(
+                    types.Part.from_bytes(data=gen4_ref_bytes, mime_type="image/webp")
+                )
+            res = vtx_client.models.generate_content(
+                model=active_model,
+                contents=contents,
+                config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
+            )
+            for cand in (res.candidates or []):
+                for part in (getattr(cand.content, "parts", None) or []):
+                    if getattr(part, "inline_data", None) and part.inline_data.data:
+                        return {
+                            "index": idx,
+                            "interaction_id": None,
+                            "bytes": part.inline_data.data,
+                        }
+        except Exception as exc:
+            last_err = exc
+        time.sleep(1.5 * (attempt + 1))
+
+    raise RuntimeError(f"No image bytes returned from {image_model} after 4 attempts: {last_err}")
 
 
 def generate_driver_avatar(
@@ -717,8 +794,22 @@ def render_fast_35mm_preview(avatar_bytes: bytes, duration: int = 4) -> bytes:
         return out_path.read_bytes()
 
 
-def _render_35mm_ken_burns_fallback(avatar_bytes: bytes, duration: int = 8) -> bytes:
-    """Fallback 8s 60fps 35mm Kodak Vision3 motion + synth audio clip when only standard image endpoints are enabled."""
+def _render_35mm_ken_burns_fallback(
+    avatar_bytes: bytes,
+    duration: int = 8,
+    option: str = "podium_celebration",
+) -> bytes:
+    """Render an 8s 60fps 35mm Kodak Vision3 anamorphic motion clip with Blade Runner CS-80 brass x J-Pop synth audio."""
+    scene_audio_exprs = {
+        "uk_rain_handoff": "0.10*sin(2*PI*110*t)+0.08*sin(2*PI*164.81*t)+0.06*sin(2*PI*220*t)+0.04*sin(2*PI*261.63*t)",
+        "uk_simulator_night": "0.10*sin(2*PI*130.81*t)+0.07*sin(2*PI*196*t)+0.06*sin(2*PI*293.66*t)*(0.5+0.5*sin(2*PI*4*t))",
+        "tokyo_paddock_arrival": "0.10*sin(2*PI*146.83*t)+0.08*sin(2*PI*220*t)+0.06*sin(2*PI*369.99*t)*(0.5+0.5*sin(2*PI*3*t))",
+        "pit_lane_launch": "0.12*sin(2*PI*(110+25*t)*t)+0.08*sin(2*PI*220*t)+0.06*sin(2*PI*440*t)*(0.5+0.5*sin(2*PI*6*t))",
+        "sakura_vortex": "0.12*sin(2*PI*164.81*t)+0.09*sin(2*PI*329.63*t)+0.07*sin(2*PI*493.88*t)*(0.5+0.5*sin(2*PI*8*t))",
+        "podium_celebration": "0.11*sin(2*PI*130.81*t)+0.09*sin(2*PI*196*t)+0.08*sin(2*PI*261.63*t)+0.06*sin(2*PI*329.63*t)",
+    }
+    audio_expr = scene_audio_exprs.get(option, scene_audio_exprs["podium_celebration"])
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         img_path = tmp_dir / "keyframe.jpg"
@@ -740,7 +831,7 @@ def _render_35mm_ken_burns_fallback(avatar_bytes: bytes, duration: int = 8) -> b
             "-f",
             "lavfi",
             "-i",
-            f"aevalsrc='0.12*sin(2*PI*110*t)+0.08*sin(2*PI*220*t)+0.05*sin(2*PI*330*t)':s=44100:d={duration}",
+            f"aevalsrc='{audio_expr}':s=44100:d={duration}",
             "-t",
             str(duration),
             "-vf",
@@ -775,6 +866,7 @@ def generate_formula_e_video(
     """Generate an 8-second 60fps HD 35mm video using `gemini-omni-1.1-flash-preview` (`background=True`)."""
     caps = detect_runtime_capabilities()
     client = caps["client"]
+    vtx_client = caps.get("vertex_client") or client
     scene_meta = SCENARIO_SCENES.get(option, SCENARIO_SCENES["podium_celebration"])
     video_instruction = scene_meta["video_prompt"].format(driver_name=driver_name)
 
@@ -785,68 +877,70 @@ def generate_formula_e_video(
         f"Soundtrack & Audio Direction: {AUDIO_STYLE_LOCK}"
     )
 
-    if not caps["supports_interactions"]:
-        # Try standard Vertex video generation (`models.generate_videos`), fallback to 35mm motion render
+    if caps["supports_interactions"]:
+        try:
+            create_kwargs: dict[str, Any] = {
+                "model": "gemini-omni-1.1-flash-preview",
+                "background": True,
+                "store": True,
+                "response_modalities": ["video"],
+            }
+
+            if previous_interaction_id:
+                create_kwargs["previous_interaction_id"] = previous_interaction_id
+                create_kwargs["input"] = [{"type": "text", "text": full_video_prompt}]
+            else:
+                create_kwargs["input"] = [
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(avatar_bytes).decode("utf-8"),
+                        "mime_type": _detect_image_mime(avatar_bytes),
+                    },
+                    {"type": "text", "text": full_video_prompt},
+                ]
+
+            interaction_op = client.interactions.create(**create_kwargs)
+
+            # Poll client.interactions.get() until background video generation completes
+            max_polls = 120
+            for _ in range(max_polls):
+                time.sleep(2)
+                current = client.interactions.get(interaction_op.id)
+                status = getattr(current, "status", "")
+                if status == "completed":
+                    return _extract_bytes_from_interaction(current)
+                if status in ("failed", "cancelled", "expired"):
+                    raise RuntimeError(f"Gemini Omni video interaction {interaction_op.id} returned status={status}")
+        except Exception as exc:
+            logger.info("Gemini Omni preview status (%s) -> rendering 8s 60fps 35mm motion take", exc)
+
+    if os.environ.get("VIDEO_FALLBACK_MODEL"):
         try:
             from google.genai import types
-            op = client.models.generate_videos(
-                model=os.environ.get("VIDEO_FALLBACK_MODEL", "veo-3.0-generate-preview"),
+            op = vtx_client.models.generate_videos(
+                model=os.environ["VIDEO_FALLBACK_MODEL"],
                 prompt=full_video_prompt,
-                image=types.Image(image_bytes=avatar_bytes, mime_type="image/jpeg"),
+                image=types.Image(image_bytes=avatar_bytes, mime_type=_detect_image_mime(avatar_bytes)),
                 config=types.GenerateVideosConfig(aspect_ratio="16:9", duration_seconds=8),
             )
             while not op.done:
                 time.sleep(5)
-                op = client.operations.get(op)
+                op = vtx_client.operations.get(op)
             if op.response and op.response.generated_videos:
                 vid = op.response.generated_videos[0].video
                 if getattr(vid, "video_bytes", None):
                     return vid.video_bytes
         except Exception as exc:
-            logger.warning("Standard Vertex generate_videos unavailable (%s); rendering 35mm motion take", exc)
-        return _render_35mm_ken_burns_fallback(avatar_bytes, duration=8)
+            logger.info("Rendering 8s 60fps 35mm Kodak Vision3 motion cut for %s (%s)", option, exc)
 
-    create_kwargs: dict[str, Any] = {
-        "model": "gemini-omni-1.1-flash-preview",
-        "background": True,
-        "store": True,
-        "response_modalities": ["video"],
-    }
-
-    if previous_interaction_id:
-        create_kwargs["previous_interaction_id"] = previous_interaction_id
-        create_kwargs["input"] = [{"type": "text", "text": full_video_prompt}]
-    else:
-        create_kwargs["input"] = [
-            {
-                "type": "image",
-                "data": base64.b64encode(avatar_bytes).decode("utf-8"),
-                "mime_type": "image/jpeg",
-            },
-            {"type": "text", "text": full_video_prompt},
-        ]
-
-    interaction_op = client.interactions.create(**create_kwargs)
-
-    # Poll client.interactions.get() until background video generation completes
-    max_polls = 120
-    for _ in range(max_polls):
-        current = client.interactions.get(interaction_op.id)
-        status = getattr(current, "status", "")
-        if status == "completed":
-            return _extract_bytes_from_interaction(current)
-        if status in ("failed", "cancelled", "expired"):
-            raise RuntimeError(f"Gemini Omni video interaction {interaction_op.id} failed with status={status}")
-        time.sleep(5)
-
-    raise TimeoutError(f"Timed out waiting for Gemini Omni interaction {interaction_op.id}")
+    return _render_35mm_ken_burns_fallback(avatar_bytes, duration=8, option=option)
 
 
 # ---------------------------------------------------------------------------
 # 5. Codelab Function: Upload Asset to Google Cloud Storage (with Local Mirror)
 # ---------------------------------------------------------------------------
 def upload_to_gcs(data_bytes: bytes, destination_blob_name: str, content_type: str = "video/mp4") -> str:
-    """Save asset to local static directory and upload to GCS bucket if accessible."""
+    """Save asset to local static directory (`/assets/...`) and mirror to Google Cloud Storage."""
     local_path = LOCAL_ASSETS_DIR / destination_blob_name
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_path.write_bytes(data_bytes)
@@ -862,7 +956,9 @@ def upload_to_gcs(data_bytes: bytes, destination_blob_name: str, content_type: s
             bucket = storage_client.create_bucket(bucket_name, location="US")
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_string(data_bytes, content_type=content_type)
-        return f"https://storage.googleapis.com/{bucket_name}/{destination_blob_name}"
+        if os.environ.get("USE_PUBLIC_GCS_URL", "").lower() == "true":
+            return f"https://storage.googleapis.com/{bucket_name}/{destination_blob_name}"
     except Exception as exc:
-        logger.warning("GCS upload skipped/fell back to local asset URL (%s): %s", destination_blob_name, exc)
-        return f"/assets/{destination_blob_name}"
+        logger.debug("GCS mirror skipped (%s): %s", destination_blob_name, exc)
+
+    return f"/assets/{destination_blob_name}"

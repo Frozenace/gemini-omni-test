@@ -12,6 +12,7 @@ from typing import Any
 from app.services.gemini_service import (
     LOCAL_ASSETS_DIR,
     _extract_text_from_interaction,
+    _parse_json_from_text,
     detect_runtime_capabilities,
     upload_to_gcs,
 )
@@ -227,11 +228,12 @@ def verify_final_cut(master_video_path: Path, driver_name: str = "Toshiro Sakamo
     try:
         if not caps["supports_interactions"]:
             from google.genai import types
+            vtx_client = caps.get("vertex_client") or client
             contents: list[Any] = [prompt_text]
             for frame in sampled_frames:
                 contents.append(types.Part.from_bytes(data=frame.read_bytes(), mime_type="image/jpeg"))
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
+            res = vtx_client.models.generate_content(
+                model="gemini-3.8-flash",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -252,10 +254,9 @@ def verify_final_cut(master_video_path: Path, driver_name: str = "Toshiro Sakamo
         res = client.interactions.create(
             model="gemini-3.8-flash",
             input=input_parts,
-            response_mime_type="application/json",
             generation_config={"thinking_level": "high", "temperature": 0.1},
         )
-        return json.loads(_extract_text_from_interaction(res))
+        return _parse_json_from_text(_extract_text_from_interaction(res))
     except Exception as exc:
         logger.warning("Final cut verification fallback: %s", exc)
         return {
